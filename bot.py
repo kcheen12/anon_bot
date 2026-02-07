@@ -2,6 +2,9 @@
 import logging
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, ContextTypes, filters
+from flask import Flask
+from threading import Thread
+import time
 
 BOT_TOKEN = "8529167671:AAGqhrDUoU8-v3zcqNwPP4mGDT8id5BeZ5I"
 ADMINS = [
@@ -190,8 +193,29 @@ def main():
 
     print("\nБот запущен!")
     print("=" * 50)
-    import time
-    time.sleep(5) 
+    
+    # === ЗАПУСК ВЕБ-СЕРВЕРА ===
+    web_app = Flask(__name__)
+
+    @web_app.route('/')
+    def home():
+        return 'Bot is running', 200
+
+    @web_app.route('/health')
+    def health():
+        return 'OK', 200
+
+    def run_web():
+        web_app.run(host='0.0.0.0', port=8080)
+
+    # Запускаем веб-сервер в отдельном потоке
+    Thread(target=run_web, daemon=True).start()
+    
+    # Даем время веб-серверу запуститься
+    time.sleep(2)
+    print("🌐 Веб-сервер запущен на порту 8080")
+    
+    # === ЗАПУСК TELEGRAM БОТА ===
     app.run_polling()
 
 
