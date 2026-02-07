@@ -167,7 +167,12 @@ async def handle_admin_reply(update: Update, context: ContextTypes.DEFAULT_TYPE)
         )
 
 
-def main():
+def run_bot():
+    """Функция запуска бота (будет перезапускаться при падении)"""
+    print(f"\n{'='*50}")
+    print(f"🚀 ЗАПУСК БОТА - {time.ctime()}")
+    print(f"{'='*50}")
+    
     print(f"Администраторы ({len(ADMINS)}):")
     for i, admin_id in enumerate(ADMINS, 1):
         print(f"  {i}. ID: {admin_id}")
@@ -175,78 +180,68 @@ def main():
     app = Application.builder().token(BOT_TOKEN).build()
 
     app.add_handler(CommandHandler("start", start))
-
     app.add_handler(MessageHandler(
         filters.TEXT & ~filters.COMMAND & ~filters.User(ADMINS),
         handle_user_message
     ))
-
     app.add_handler(MessageHandler(
         filters.PHOTO & ~filters.User(ADMINS),
         handle_user_message
     ))
-
     app.add_handler(MessageHandler(
         filters.ALL & ~filters.COMMAND & filters.User(ADMINS),
         handle_admin_reply
     ))
 
-    print("\nБот запущен!")
-    print("=" * 50)
+    print("✅ Бот инициализирован")
     
-    # === ЗАПУСК ВЕБ-СЕРВЕРА ===
-    web_app = Flask(__name__)
+    # === ВЕБ-СЕРВЕР (если нужен) ===
+    if "RENDER" in os.environ:
+        web_app = Flask(__name__)
 
-    @web_app.route('/')
-    def home():
-        return 'Bot is running', 200
+        @web_app.route('/')
+        def home():
+            return 'Bot is running', 200
 
-    @web_app.route('/health')
-    def health():
-        return 'OK', 200
+        def run_web():
+            web_app.run(
+                host='0.0.0.0', 
+                port=8080, 
+                debug=False, 
+                use_reloader=False
+            )
 
-    def run_web():
-        web_app.run(host='0.0.0.0', port=8080, debug=False, use_reloader=False)
+        Thread(target=run_web, daemon=True).start()
+        time.sleep(2)
+        print("🌐 Веб-сервер запущен")
 
-    # Запускаем веб-сервер в отдельном потоке
-    Thread(target=run_web, daemon=True).start()
-    
-    # Даем время веб-серверу запуститься
-    time.sleep(2)
-    print("🌐 Веб-сервер запущен на порту 8080")
-    
-    # === ЗАПУСК TELEGRAM БОТА С ПОВТОРАМИ ===
-    max_attempts = 5
-    for attempt in range(max_attempts):
-        try:
-            print(f"🚀 Попытка запуска {attempt + 1}/{max_attempts}")
-            
-            # Telegram бот
-            app.run_polling(drop_pending_updates=True)
-            break  # Если успешно - выходим из цикла
-            
-        except Exception as e:
-            if "Conflict" in str(e):
-                print(f"⚠️ Конфликт! Ждем {30 * (attempt + 1)} секунд...")
-                time.sleep(30 * (attempt + 1))
-                
-                # На последней попытке убиваем возможные процессы
-                if attempt == max_attempts - 1:
-                    print("💀 Принудительно убиваем старые процессы...")
-                    try:
-                        import os
-                        os.system("pkill -f 'python.*bot' 2>/dev/null || true")
-                        time.sleep(10)
-                    except:
-                        pass
-            else:
-                print(f"❌ Другая ошибка: {e}")
-                raise  # Перебрасываем другие ошибки
-    
-    print("✅ Бот успешно запущен!")
+    # === ЗАПУСК TELEGRAM БОТА ===
+    print("🤖 Запускаем polling...")
+    app.run_polling(
+        drop_pending_updates=True,
+        close_loop=False  # Важно!
+    )
 
 
 if __name__ == "__main__":
-    main()
-
-
+    # БЕСКОНЕЧНЫЙ ЦИКЛ ПЕРЕЗАПУСКА
+    restart_count = 0
+    while True:
+        try:
+            run_bot()
+        except KeyboardInterrupt:
+            print("\n👋 Остановка бота по команде пользователя")
+            break
+        except Exception as e:
+            restart_count += 1
+            print(f"\n{'='*50}")
+            print(f"💥 БОТ УПАЛ (перезапуск #{restart_count})")
+            print(f"Ошибка: {e}")
+            print("Трейсбек:")
+            traceback.print_exc()
+            print(f"{'='*50}")
+            
+            # Ждем перед перезапуском
+            wait_time = min(30 * restart_count, 300)  # максимум 5 минут
+            print(f"🔄 Перезапуск через {wait_time} секунд...")
+            time.sleep(wait_time)
