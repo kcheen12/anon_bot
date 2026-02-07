@@ -33,164 +33,138 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def handle_user_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
-
-    if user.id in ADMINS:
-        return
-
     msg = update.message
+
     if msg.text and msg.text.startswith('/'):
         return
 
     try:
         for admin_id in ADMINS:
             try:
-                sent_message = None
-
                 if msg.photo:
-                    sent_message = await context.bot.send_photo(
+                    await context.bot.send_photo(
                         chat_id=admin_id,
                         photo=msg.photo[-1].file_id,
-                        caption=f"*Анонер {user.id}*\n\n"
-                                f"{msg.caption if msg.caption else ''}\n\n",
+                        caption=f"👤 Пользователь: {user.id}\n\n"
+                                f"📷 Фото\n"
+                                f"{msg.caption if msg.caption else ''}\n\n"
+                                f"🕒 {msg.date.strftime('%H:%M')}",
                         parse_mode="Markdown"
                     )
-
+                    
                 elif msg.text:
-                    sent_message = await context.bot.send_message(
+                    await context.bot.send_message(
                         chat_id=admin_id,
-                        text=f"*Анонер {user.id}*\n\n"
-                             f"{msg.text}\n\n",
+                        text=f"👤 Пользователь: {user.id}\n\n"
+                             f"💬 {msg.text}\n\n"
+                             f"🕒 {msg.date.strftime('%H:%M')}",
                         parse_mode="Markdown"
                     )
-
+                
                 else:
-                    sent_message = await context.bot.send_message(
+                    await context.bot.send_message(
                         chat_id=admin_id,
-                        text=f"*Анонер {user.id}*\n\n"
-                             f"Файл/Медиа\n\n",
+                        text=f"👤 Пользователь: {user.id}\n\n"
+                             f"📎 Файл/Медиа\n\n"
+                             f"🕒 {msg.date.strftime('%H:%M')}",
                         parse_mode="Markdown"
                     )
 
-                # Сохраняем связь между сообщением админа и пользователя
-                if sent_message:
-                    forward_map[sent_message.message_id] = (user.id, msg.message_id)
-                    logging.info(
-                        f"Сохранил связь: сообщение {sent_message.message_id} → пользователь {user.id}, msg_id {msg.message_id}")
-
-                logging.info(f"[{user.id}] → Админу {admin_id}")
+                print(f"📤 [{user.id}] → Админу {admin_id}")
 
             except Exception as e:
-                logging.error(f"Не удалось отправить админу {admin_id}: {e}")
+                print(f"Не удалось отправить админу {admin_id}: {e}")
 
-        await msg.reply_text("Сообщение отправлено всем админам, не спамь. Как получишь ответ - отпишись сообщением, чтобы уведомить остальных >.<")
+        await msg.reply_text("Сообщение отправлено всем админам, советую не спамить и дождаться ответа одного из.")
 
     except Exception as e:
-        logging.error(f"Ошибка: {e}")
+        print(f"Ошибка: {e}")
         await msg.reply_text("Ошибка, попробуй позже")
 
-
+# ОТВЕТЫ ОТ АДМИНОВ
 async def handle_admin_reply(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     msg = update.message
 
-    # Проверяем, что это админ
     if user.id not in ADMINS:
         return
 
-    # Пропускаем команды
     if msg.text and msg.text.startswith('/'):
         return
 
-    # Проверяем, является ли сообщение ответом на что-либо
-    if not msg.reply_to_message:
-        logging.info(f"Сообщение админа {user.id} не является ответом")
-        return
-
-    replied_msg_id = msg.reply_to_message.message_id
-
-    logging.info(f"Админ {user.id} ответил на сообщение {replied_msg_id}")
-    logging.info(f"Доступные ключи в forward_map: {list(forward_map.keys())}")
-
-    # Проверяем, есть ли это сообщение в нашем словаре
-    if replied_msg_id in forward_map:
-        target_user_id, target_message_id = forward_map[replied_msg_id]
-
-        logging.info(
-            f"Нашел связь: сообщение {replied_msg_id} → пользователь {target_user_id}, msg_id {target_message_id}")
-
-        try:
-            # Отправляем ответ пользователю, отвечая на его исходное сообщение
-            if msg.text:
+    if msg.reply_to_message:
+        replied_text = msg.reply_to_message.text or msg.reply_to_message.caption
+        
+        if replied_text and "Пользователь:" in replied_text:
+            try:
+                lines = replied_text.split('\n')
+                user_line = lines[0]
+                target_user_id = int(user_line.replace("👤 Пользователь:", "").strip())
+                
                 await context.bot.send_message(
                     chat_id=target_user_id,
-                    text=f"*Ответ админа:*\n\n{msg.text}",
-                    parse_mode="Markdown",
-                    reply_to_message_id=target_message_id
-                )
-            elif msg.photo:
-                await context.bot.send_photo(
-                    chat_id=target_user_id,
-                    photo=msg.photo[-1].file_id,
-                    caption=f"*Ответ админа:*\n\n{msg.caption if msg.caption else ''}",
-                    parse_mode="Markdown",
-                    reply_to_message_id=target_message_id
-                )
-            else:
-                # Для других типов сообщений (документы, стикеры и т.д.)
-                await context.bot.copy_message(
-                    chat_id=target_user_id,
-                    from_chat_id=msg.chat_id,
-                    message_id=msg.message_id,
-                    reply_to_message_id=target_message_id
+                    text=f"💌 *Ответ от администратора:*\n\n{msg.text}",
+                    parse_mode="Markdown"
                 )
 
-            await msg.reply_text(f"Ответ отправлен анонеру")
-            logging.info(f"📨 Админ {user.id} → Пользователю {target_user_id} (ответ на msg {target_message_id})")
+                await msg.reply_text(f"✅ Ответ отправлен пользователю {target_user_id}")
 
-        except Exception as e:
-            logging.error(f"Ошибка отправки анонеру {target_user_id}: {e}")
-            await msg.reply_text(f"❌ Не удалось отправить пользователю: {e}")
+                for admin_id in ADMINS:
+                    if admin_id != user.id:
+                        try:
+                            await context.bot.send_message(
+                                chat_id=admin_id,
+                                text=f"👤 Админ ответил пользователю {target_user_id}"
+                            )
+                        except:
+                            pass
 
-    else:
-        logging.warning(f"Сообщение {replied_msg_id} не найдено в forward_map")
-        await msg.reply_text(
-            "Это сообщение не является пересланным от пользователя или устарело.\n\n"
-            "📌 *Как ответить пользователю:*\n"
-            "1. Найдите сообщение от бота с текстом 'Пользователь:'\n"
-            "2. Нажмите 'Ответить' на него\n"
-            "3. Напишите текст\n\n"
-            "Бот отправит ответ анонимно.",
-            parse_mode="Markdown"
-        )
+                print(f"📨 Админ {user.id} → Пользователю {target_user_id}")
+                return
 
+            except Exception as e:
+                print(f"Ошибка: {e}")
+                await msg.reply_text("❌ Ошибка")
+                return
+    
+    await msg.reply_text(
+        "📌 *Как ответить пользователю:*\n\n"
+        "1. Найдите сообщение от бота с текстом 'Пользователь:'\n"
+        "2. Нажмите 'Ответить' на него\n"
+        "3. Напишите текст\n\n"
+        "Бот отправит ответ анонимно.",
+        parse_mode="Markdown"
+    )
 
-def main():
+# ЗАПУСК БОТА (ВСЁ ИСПРАВЛЕНО ЗДЕСЬ!)
+if __name__ == "__main__":
     print(f"👑 Администраторы ({len(ADMINS)}):")
     for i, admin_id in enumerate(ADMINS, 1):
         print(f"  {i}. ID: {admin_id}")
-
+    
+    # СОЗДАЁМ БОТА
     app = Application.builder().token(BOT_TOKEN).build()
-
+    
+    # ДОБАВЛЯЕМ ОБРАБОТЧИКИ
     app.add_handler(CommandHandler("start", start))
-
+    
     app.add_handler(MessageHandler(
-        filters.TEXT & ~filters.COMMAND & ~filters.User(ADMINS),
+        filters.TEXT & ~filters.COMMAND,
         handle_user_message
     ))
-
+    
     app.add_handler(MessageHandler(
-        filters.PHOTO & ~filters.User(ADMINS),
+        filters.PHOTO,
         handle_user_message
     ))
-
+    
     app.add_handler(MessageHandler(
-        filters.ALL & ~filters.COMMAND & filters.User(ADMINS),
+        filters.TEXT & ~filters.COMMAND & filters.User(ADMINS),
         handle_admin_reply
     ))
-
+    
+    print("\n✅ Бот запущен!")
+    print("=" * 50)
+    
+    # ЗАПУСКАЕМ БОТА (ОДИН РАЗ!)
     app.run_polling()
-
-
-if __name__ == "__main__":
-    main()
-
