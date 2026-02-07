@@ -206,7 +206,7 @@ def main():
         return 'OK', 200
 
     def run_web():
-        web_app.run(host='0.0.0.0', port=8080)
+        web_app.run(host='0.0.0.0', port=8080, debug=False, use_reloader=False)
 
     # Запускаем веб-сервер в отдельном потоке
     Thread(target=run_web, daemon=True).start()
@@ -215,9 +215,38 @@ def main():
     time.sleep(2)
     print("🌐 Веб-сервер запущен на порту 8080")
     
-    # === ЗАПУСК TELEGRAM БОТА ===
-    app.run_polling()
+    # === ЗАПУСК TELEGRAM БОТА С ПОВТОРАМИ ===
+    max_attempts = 5
+    for attempt in range(max_attempts):
+        try:
+            print(f"🚀 Попытка запуска {attempt + 1}/{max_attempts}")
+            
+            # Telegram бот
+            app.run_polling(drop_pending_updates=True)
+            break  # Если успешно - выходим из цикла
+            
+        except Exception as e:
+            if "Conflict" in str(e):
+                print(f"⚠️ Конфликт! Ждем {30 * (attempt + 1)} секунд...")
+                time.sleep(30 * (attempt + 1))
+                
+                # На последней попытке убиваем возможные процессы
+                if attempt == max_attempts - 1:
+                    print("💀 Принудительно убиваем старые процессы...")
+                    try:
+                        import os
+                        os.system("pkill -f 'python.*bot' 2>/dev/null || true")
+                        time.sleep(10)
+                    except:
+                        pass
+            else:
+                print(f"❌ Другая ошибка: {e}")
+                raise  # Перебрасываем другие ошибки
+    
+    print("✅ Бот успешно запущен!")
 
 
 if __name__ == "__main__":
     main()
+
+
