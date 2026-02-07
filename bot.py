@@ -1,10 +1,12 @@
 #!/usr/bin/env python3""
+import os
+import time
 import logging
+import traceback
+from threading import Thread
+from flask import Flask
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, ContextTypes, filters
-from flask import Flask
-from threading import Thread
-import time
 
 BOT_TOKEN = "8529167671:AAGqhrDUoU8-v3zcqNwPP4mGDT8id5BeZ5I"
 ADMINS = [
@@ -245,3 +247,4 @@ if __name__ == "__main__":
             wait_time = min(30 * restart_count, 300)  # максимум 5 минут
             print(f"🔄 Перезапуск через {wait_time} секунд...")
             time.sleep(wait_time)
+
