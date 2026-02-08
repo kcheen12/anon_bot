@@ -12,6 +12,7 @@ ADMINS = [
     5410696822,  # лиза
     7032286132,  # жан
     7607540379,  # нари
+    6806766903,  # тсунэтами
 ]
 
 forward_map = {}
@@ -111,7 +112,6 @@ async def handle_admin_reply(update: Update, context: ContextTypes.DEFAULT_TYPE)
     replied_msg_id = msg.reply_to_message.message_id
 
     logging.info(f"Админ {user.id} ответил на сообщение {replied_msg_id}")
-    logging.info(f"Доступные ключи в forward_map: {list(forward_map.keys())}")
 
     # Проверяем, есть ли это сообщение в нашем словаре
     if replied_msg_id in forward_map:
@@ -176,19 +176,26 @@ def run_bot():
     for i, admin_id in enumerate(ADMINS, 1):
         print(f"  {i}. ID: {admin_id}")
 
-    app = Application.builder().token(BOT_TOKEN).build()
+    # Для версии 21.x используем такой подход
+    app = Application.builder().token(BOT_TOKEN).concurrent_updates(True).build()
 
     app.add_handler(CommandHandler("start", start))
+    
+    # Фильтр для обычных пользователей (не админов)
+    user_filter = ~filters.User(user_id=ADMINS)
     app.add_handler(MessageHandler(
-        filters.TEXT & ~filters.COMMAND & ~filters.User(ADMINS),
+        filters.TEXT & ~filters.COMMAND & user_filter,
         handle_user_message
     ))
     app.add_handler(MessageHandler(
-        filters.PHOTO & ~filters.User(ADMINS),
+        filters.PHOTO & user_filter,
         handle_user_message
     ))
+    
+    # Фильтр для админов
+    admin_filter = filters.User(user_id=ADMINS) & ~filters.COMMAND
     app.add_handler(MessageHandler(
-        filters.ALL & ~filters.COMMAND & filters.User(ADMINS),
+        admin_filter,
         handle_admin_reply
     ))
 
@@ -214,6 +221,6 @@ if __name__ == "__main__":
             print(f"{'='*50}")
             
             # Ждем перед перезапуском
-            wait_time = min(30 * restart_count, 300)  # максимум 5 минут
+            wait_time = min(30 * restart_count, 300)
             print(f"🔄 Перезапуск через {wait_time} секунд...")
             time.sleep(wait_time)
