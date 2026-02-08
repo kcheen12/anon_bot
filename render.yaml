@@ -1,15 +1,12 @@
 services:
   - type: web
-    name: telegram-bot-webhook
+    name: telegram-bot-simple
     env: python
     buildCommand: pip install -r requirements.txt
-    startCommand: python bot.py
+    startCommand: gunicorn app:app
     envVars:
       - key: PORT
         value: 8080
-      - key: BOT_TOKEN
-        sync: false  # Это ОЧЕНЬ важно! Значение будет устанавливаться вручную
-      - key: PYTHON_VERSION
-        value: 3.11.0
     healthCheckPath: /health
     autoDeploy: true
+    plan: free
