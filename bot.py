@@ -3,7 +3,8 @@ import os
 import time
 import logging
 import sqlite3
-from threading import Thread
+import asyncio
+from threading import Thread, Event
 from flask import Flask, request, jsonify
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, ContextTypes, filters
@@ -87,6 +88,10 @@ def get_user_count():
         logging.error(f"Ошибка получения количества пользователей: {e}")
         return 0
 
+# ====== ГЛОБАЛЬНЫЕ ПЕРЕМЕННЫЕ ======
+telegram_app = None
+shutdown_event = Event()
+
 # ====== КОМАНДЫ ======
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обработка команды /start"""
@@ -160,7 +165,7 @@ async def broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     f"❌ Ошибок: {fail_count}"
                 )
             
-            # Небольшая задержка, чтобы не превысить лимиты Telegram
+            # Небольшая задержка
             await asyncio.sleep(0.1)
             
         except Exception as e:
@@ -175,7 +180,7 @@ async def broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
     report += f"• Успешно отправлено: {success_count}\n"
     report += f"• Не удалось отправить: {fail_count}\n"
     
-    if fail_count > 0 and fail_count <= 5:  # Показываем детали если ошибок немного
+    if fail_count > 0 and fail_count <= 5:
         report += f"\n❌ Ошибки:\n" + "\n".join(fail_details)
     
     await status_msg.edit_text(report)
@@ -191,7 +196,7 @@ async def users_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     # Получаем статистику
     total_users = get_user_count()
-    users = get_all_users()[:10]  # Последние 10 пользователей
+    users = get_all_users()[:10]
     
     if total_users == 0:
         await update.message.reply_text("📊 В базе данных пока нет пользователей.")
@@ -220,13 +225,10 @@ async def handle_user_message(update: Update, context: ContextTypes.DEFAULT_TYPE
     # Сохраняем пользователя в БД
     save_user(user)
     
-    # Проверяем, является ли пользователь админом
     if user.id in ADMINS:
         return
     
     msg = update.message
-    
-    # Пропускаем команды
     if msg.text and msg.text.startswith('/'):
         return
     
@@ -239,34 +241,25 @@ async def handle_user_message(update: Update, context: ContextTypes.DEFAULT_TYPE
                     sent_message = await context.bot.send_photo(
                         chat_id=admin_id,
                         photo=msg.photo[-1].file_id,
-                        caption=f"*Анонер {user.id}*\n\n"
-                                f"{msg.caption if msg.caption else ''}\n\n",
+                        caption=f"*Анонер {user.id}*\n\n{msg.caption if msg.caption else ''}\n\n",
                         parse_mode="Markdown"
                     )
-                
                 elif msg.text:
                     sent_message = await context.bot.send_message(
                         chat_id=admin_id,
-                        text=f"*Анонер {user.id}*\n\n"
-                             f"{msg.text}\n\n",
+                        text=f"*Анонер {user.id}*\n\n{msg.text}\n\n",
                         parse_mode="Markdown"
                     )
-                
                 else:
                     sent_message = await context.bot.send_message(
                         chat_id=admin_id,
-                        text=f"*Анонер {user.id}*\n\n"
-                             f"Файл/Медиа\n\n",
+                        text=f"*Анонер {user.id}*\n\nФайл/Медиа\n\n",
                         parse_mode="Markdown"
                     )
                 
-                # Сохраняем связь между сообщением админа и пользователя
                 if sent_message:
                     forward_map[sent_message.message_id] = (user.id, msg.message_id)
-                    logging.info(
-                        f"Сохранил связь: сообщение {sent_message.message_id} → пользователь {user.id}, msg_id {msg.message_id}")
-                
-                logging.info(f"[{user.id}] → Админу {admin_id}")
+                    logging.info(f"Сохранил связь: {sent_message.message_id} → {user.id}")
                 
             except Exception as e:
                 logging.error(f"Не удалось отправить админу {admin_id}: {e}")
@@ -285,32 +278,22 @@ async def handle_admin_reply(update: Update, context: ContextTypes.DEFAULT_TYPE)
     user = update.effective_user
     msg = update.message
     
-    # Проверяем, что это админ
     if user.id not in ADMINS:
         return
     
-    # Пропускаем команды
     if msg.text and msg.text.startswith('/'):
         return
     
-    # Проверяем, является ли сообщение ответом на что-либо
     if not msg.reply_to_message:
         logging.info(f"Сообщение админа {user.id} не является ответом")
         return
     
     replied_msg_id = msg.reply_to_message.message_id
     
-    logging.info(f"Админ {user.id} ответил на сообщение {replied_msg_id}")
-    
-    # Проверяем, есть ли это сообщение в нашем словаре
     if replied_msg_id in forward_map:
         target_user_id, target_message_id = forward_map[replied_msg_id]
         
-        logging.info(
-            f"Нашел связь: сообщение {replied_msg_id} → пользователь {target_user_id}, msg_id {target_message_id}")
-        
         try:
-            # Отправляем ответ пользователю, отвечая на его исходное сообщение
             if msg.text:
                 await context.bot.send_message(
                     chat_id=target_user_id,
@@ -327,7 +310,6 @@ async def handle_admin_reply(update: Update, context: ContextTypes.DEFAULT_TYPE)
                     reply_to_message_id=target_message_id
                 )
             else:
-                # Для других типов сообщений (документы, стикеры и т.д.)
                 await context.bot.copy_message(
                     chat_id=target_user_id,
                     from_chat_id=msg.chat_id,
@@ -336,14 +318,12 @@ async def handle_admin_reply(update: Update, context: ContextTypes.DEFAULT_TYPE)
                 )
             
             await msg.reply_text(f"✅ Ответ отправлен анонеру")
-            logging.info(f"Админ {user.id} → Пользователю {target_user_id} (ответ на msg {target_message_id})")
-        
+            
         except Exception as e:
             logging.error(f"Ошибка отправки анонеру {target_user_id}: {e}")
             await msg.reply_text(f"❌ Не удалось отправить пользователю: {e}")
     
     else:
-        logging.warning(f"Сообщение {replied_msg_id} не найдено в forward_map")
         await msg.reply_text(
             "Это сообщение не является пересланным от пользователя или устарело.\n\n"
             "Как ответить пользователю:\n"
@@ -355,10 +335,10 @@ async def handle_admin_reply(update: Update, context: ContextTypes.DEFAULT_TYPE)
         )
 
 # ====== ИНИЦИАЛИЗАЦИЯ БОТА ======
-def create_app():
-    """Создание и настройка приложения"""
+def create_telegram_app():
+    """Создание и настройка приложения Telegram"""
     print(f"\n{'='*50}")
-    print(f"🚀 ИНИЦИАЛИЗАЦИЯ БОТА - {time.ctime()}")
+    print(f"🚀 ИНИЦИАЛИЗАЦИЯ WEBHOOK БОТА - {time.ctime()}")
     print(f"{'='*50}")
     
     # Инициализация базы данных
@@ -386,13 +366,16 @@ def create_app():
         handle_admin_reply
     ))
     
+    print(f"✅ Бот инициализирован")
+    print(f"👑 Админов: {len(ADMINS)}")
+    print(f"📊 Пользователей в базе: {get_user_count()}")
+    
     return application
 
 # ====== FLASK APP ДЛЯ WEBHOOK ======
-app = Flask(__name__)
-telegram_app = None
+flask_app = Flask(__name__)
 
-@app.route('/')
+@flask_app.route('/')
 def home():
     """Домашняя страница"""
     return '''
@@ -412,25 +395,31 @@ def home():
         <div class="info">
             <p>Webhook настроен и готов к приему обновлений</p>
             <p>Пользователей в базе: {}</p>
+            <p>Режим: Webhook (без polling)</p>
         </div>
     </body>
     </html>
     '''.format(get_user_count())
 
-@app.route('/health')
+@flask_app.route('/health')
 def health():
     """Проверка здоровья для Render"""
     return jsonify({
         'status': 'healthy',
         'timestamp': time.time(),
         'users_count': get_user_count(),
-        'bot': 'running'
+        'bot': 'webhook',
+        'version': '2.0'
     }), 200
 
-@app.route(f'/{BOT_TOKEN}', methods=['POST'])
+@flask_app.route(f'/webhook/{BOT_TOKEN}', methods=['POST'])
 async def webhook():
     """Endpoint для получения обновлений от Telegram"""
     try:
+        # Проверяем, инициализировано ли приложение
+        if not telegram_app:
+            return jsonify({'status': 'error', 'message': 'Bot not initialized'}), 500
+        
         # Парсим обновление от Telegram
         update = Update.de_json(request.get_json(force=True), telegram_app.bot)
         
@@ -445,71 +434,75 @@ async def webhook():
 
 def setup_webhook():
     """Настройка webhook"""
-    import asyncio
+    global telegram_app
     
     # Даем время Flask запуститься
     time.sleep(3)
     
     # Получаем URL для webhook
-    render_app_name = os.environ.get('RENDER_APP_NAME', '')
     render_external_url = os.environ.get('RENDER_EXTERNAL_URL', '')
     
     if render_external_url:
         # На Render
-        webhook_url = f"{render_external_url}/{BOT_TOKEN}"
+        webhook_url = f"{render_external_url}/webhook/{BOT_TOKEN}"
     else:
-        # Локальная разработка (используем ngrok или аналоги)
+        # Локальная разработка
         port = int(os.environ.get('PORT', 8080))
-        webhook_url = f"http://localhost:{port}/{BOT_TOKEN}"
+        webhook_url = f"http://localhost:{port}/webhook/{BOT_TOKEN}"
         print(f"⚠️  Локальный режим: {webhook_url}")
-        print("ℹ️  Для продакшена установите переменную RENDER_EXTERNAL_URL")
     
     print(f"🌐 Webhook URL: {webhook_url}")
     
     try:
-        # Устанавливаем webhook асинхронно
-        async def set_webhook_async():
-            await telegram_app.bot.set_webhook(
-                url=webhook_url,
-                max_connections=100,
-                drop_pending_updates=True,
-                allowed_updates=['message', 'callback_query']
-            )
-            print("✅ Webhook успешно установлен")
-            print(f"📊 Пользователей в базе: {get_user_count()}")
-            print(f"👑 Админов: {len(ADMINS)}")
-            print(f"🆔 Ваш ID: {YOUR_ID}")
+        # Удаляем старый webhook, если есть
+        telegram_app.bot.delete_webhook(drop_pending_updates=True)
+        time.sleep(1)
         
-        # Запускаем асинхронную функцию
-        asyncio.run(set_webhook_async())
+        # Устанавливаем новый webhook
+        telegram_app.bot.set_webhook(
+            url=webhook_url,
+            max_connections=100,
+            drop_pending_updates=True,
+            allowed_updates=['message', 'callback_query']
+        )
+        
+        print("✅ Webhook успешно установлен")
+        print(f"📊 Пользователей в базе: {get_user_count()}")
+        print(f"👑 Админов: {len(ADMINS)}")
+        print(f"🆔 Ваш ID: {YOUR_ID}")
         
     except Exception as e:
         print(f"❌ Ошибка установки webhook: {e}")
-        print("🔄 Попробую перезапустить через 10 секунд...")
+        print("🔄 Повторная попытка через 10 секунд...")
         time.sleep(10)
-        setup_webhook()  # Рекурсивный вызов
+        setup_webhook()
 
 def run_flask():
     """Запуск Flask приложения"""
     port = int(os.environ.get('PORT', 8080))
     print(f"🚀 Запуск Flask на порту {port}")
-    print(f"📡 Webhook endpoint: https://ваш-домен.он-рендер/{BOT_TOKEN}")
     
-    app.run(
+    # Явно указываем host и port
+    flask_app.run(
         host='0.0.0.0',
         port=port,
         debug=False,
-        use_reloader=False
+        use_reloader=False,
+        threaded=True
     )
 
 # ====== ГЛАВНАЯ ФУНКЦИЯ ======
 if __name__ == "__main__":
+    print("=" * 60)
+    print("🚀 ЗАПУСК БОТА С WEBHOOK (без polling)")
+    print("=" * 60)
+    
     # Инициализируем приложение Telegram
-    telegram_app = create_app()
+    telegram_app = create_telegram_app()
     
     # Запускаем настройку webhook в отдельном потоке
     webhook_thread = Thread(target=setup_webhook, daemon=True)
     webhook_thread.start()
     
-    # Запускаем Flask
+    # Запускаем Flask (блокирующий вызов)
     run_flask()
