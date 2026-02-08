@@ -3,6 +3,7 @@ import logging
 import time
 import traceback
 import asyncio
+import sys
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, ContextTypes, filters
 
@@ -166,8 +167,8 @@ async def handle_admin_reply(update: Update, context: ContextTypes.DEFAULT_TYPE)
         )
 
 
-def run_bot():
-    """Функция запуска бота"""
+async def run_bot_async():
+    """Асинхронная функция запуска бота"""
     print(f"\n{'='*50}")
     print(f"🚀 ЗАПУСК БОТА - {time.ctime()}")
     print(f"{'='*50}")
@@ -176,8 +177,15 @@ def run_bot():
     for i, admin_id in enumerate(ADMINS, 1):
         print(f"  {i}. ID: {admin_id}")
 
-    # Для версии 21.x используем такой подход
-    app = Application.builder().token(BOT_TOKEN).concurrent_updates(True).build()
+    # Создаем приложение с настройками для стабильности
+    app = Application.builder() \
+        .token(BOT_TOKEN) \
+        .concurrent_updates(True) \
+        .pool_timeout(30.0) \
+        .connect_timeout(30.0) \
+        .read_timeout(30.0) \
+        .write_timeout(30.0) \
+        .build()
 
     app.add_handler(CommandHandler("start", start))
     
@@ -200,27 +208,71 @@ def run_bot():
     ))
 
     print("✅ Бот запущен")
-    app.run_polling(drop_pending_updates=True)
+    
+    # Запускаем polling с отключением обработки сигналов
+    await app.initialize()
+    await app.start()
+    await app.updater.start_polling(
+        drop_pending_updates=True,
+        poll_interval=1.0,
+        timeout=10,
+        bootstrap_retries=-1,
+        read_timeout=10,
+        write_timeout=10,
+        connect_timeout=10,
+        pool_timeout=10
+    )
+    
+    # Блокируем выполнение, пока бот работает
+    await asyncio.Event().wait()
+
+
+def run_bot():
+    """Запуск бота с правильной обработкой event loop"""
+    try:
+        # Создаем новый event loop для каждого перезапуска
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        
+        # Запускаем бота
+        loop.run_until_complete(run_bot_async())
+    except KeyboardInterrupt:
+        print("\n👋 Остановка бота по команде пользователя")
+    except Exception as e:
+        raise e
+    finally:
+        # Закрываем event loop
+        loop = asyncio.get_event_loop()
+        if not loop.is_closed():
+            loop.close()
 
 
 if __name__ == "__main__":
-    # БЕСКОНЕЧНЫЙ ЦИКЛ ПЕРЕЗАПУСКА
+    # БЕСКОНЕЧНЫЙ ЦИКЛ ПЕРЕЗАПУСКА с правильной обработкой event loop
     restart_count = 0
-    while True:
+    max_restarts = 10  # Максимум 10 перезапусков
+    
+    while restart_count < max_restarts:
         try:
             run_bot()
+            # Если бот остановился нормально (не по ошибке), выходим
+            break
         except KeyboardInterrupt:
             print("\n👋 Остановка бота по команде пользователя")
             break
         except Exception as e:
             restart_count += 1
             print(f"\n{'='*50}")
-            print(f"💥 БОТ УПАЛ (перезапуск #{restart_count})")
+            print(f"💥 БОТ УПАЛ (перезапуск #{restart_count}/{max_restarts})")
             print(f"Ошибка: {e}")
+            print("Трейсбек:")
             traceback.print_exc()
             print(f"{'='*50}")
             
             # Ждем перед перезапуском
-            wait_time = min(30 * restart_count, 300)
+            wait_time = min(30 * restart_count, 120)  # максимум 2 минуты
             print(f"🔄 Перезапуск через {wait_time} секунд...")
             time.sleep(wait_time)
+    
+    if restart_count >= max_restarts:
+        print(f"\n❌ Достигнут максимум перезапусков ({max_restarts}). Бот остановлен.")
