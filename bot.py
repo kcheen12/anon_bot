@@ -4,6 +4,8 @@ import time
 import traceback
 import asyncio
 import sys
+from threading import Thread
+from flask import Flask
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, ContextTypes, filters
 
@@ -13,7 +15,6 @@ ADMINS = [
     5410696822,  # лиза
     7032286132,  # жан
     7607540379,  # нари
-    6806766903,  # тсунэтами
 ]
 
 forward_map = {}
@@ -167,6 +168,23 @@ async def handle_admin_reply(update: Update, context: ContextTypes.DEFAULT_TYPE)
         )
 
 
+def run_flask():
+    """Запуск Flask сервера для Render"""
+    app = Flask(__name__)
+    
+    @app.route('/')
+    def home():
+        return '🤖 Telegram Bot is running', 200
+    
+    @app.route('/health')
+    def health():
+        return 'OK', 200
+    
+    port = 8080
+    print(f"🌐 Flask запущен на порту {port}")
+    app.run(host='0.0.0.0', port=port, debug=False, use_reloader=False)
+
+
 async def run_bot_async():
     """Асинхронная функция запуска бота"""
     print(f"\n{'='*50}")
@@ -177,14 +195,10 @@ async def run_bot_async():
     for i, admin_id in enumerate(ADMINS, 1):
         print(f"  {i}. ID: {admin_id}")
 
-    # Создаем приложение с настройками для стабильности
+    # Создаем приложение
     app = Application.builder() \
         .token(BOT_TOKEN) \
         .concurrent_updates(True) \
-        .pool_timeout(30.0) \
-        .connect_timeout(30.0) \
-        .read_timeout(30.0) \
-        .write_timeout(30.0) \
         .build()
 
     app.add_handler(CommandHandler("start", start))
@@ -209,7 +223,7 @@ async def run_bot_async():
 
     print("✅ Бот запущен")
     
-    # Запускаем polling с отключением обработки сигналов
+    # Запускаем polling
     await app.initialize()
     await app.start()
     await app.updater.start_polling(
@@ -223,39 +237,41 @@ async def run_bot_async():
         pool_timeout=10
     )
     
-    # Блокируем выполнение, пока бот работает
+    # Ждем пока бот работает
     await asyncio.Event().wait()
 
 
 def run_bot():
-    """Запуск бота с правильной обработкой event loop"""
+    """Запуск бота"""
     try:
-        # Создаем новый event loop для каждого перезапуска
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
-        
-        # Запускаем бота
         loop.run_until_complete(run_bot_async())
     except KeyboardInterrupt:
-        print("\n👋 Остановка бота по команде пользователя")
+        print("\n👋 Остановка бота")
     except Exception as e:
         raise e
     finally:
-        # Закрываем event loop
         loop = asyncio.get_event_loop()
         if not loop.is_closed():
             loop.close()
 
 
 if __name__ == "__main__":
-    # БЕСКОНЕЧНЫЙ ЦИКЛ ПЕРЕЗАПУСКА с правильной обработкой event loop
+    # Запускаем Flask в отдельном потоке
+    flask_thread = Thread(target=run_flask, daemon=True)
+    flask_thread.start()
+    
+    # Ждем немного чтобы Flask запустился
+    time.sleep(2)
+    
+    # БЕСКОНЕЧНЫЙ ЦИКЛ ПЕРЕЗАПУСКА
     restart_count = 0
-    max_restarts = 10  # Максимум 10 перезапусков
+    max_restarts = 50
     
     while restart_count < max_restarts:
         try:
             run_bot()
-            # Если бот остановился нормально (не по ошибке), выходим
             break
         except KeyboardInterrupt:
             print("\n👋 Остановка бота по команде пользователя")
@@ -265,12 +281,11 @@ if __name__ == "__main__":
             print(f"\n{'='*50}")
             print(f"💥 БОТ УПАЛ (перезапуск #{restart_count}/{max_restarts})")
             print(f"Ошибка: {e}")
-            print("Трейсбек:")
             traceback.print_exc()
             print(f"{'='*50}")
             
             # Ждем перед перезапуском
-            wait_time = min(30 * restart_count, 120)  # максимум 2 минуты
+            wait_time = min(30, 10 * restart_count)  # от 10 до 30 секунд
             print(f"🔄 Перезапуск через {wait_time} секунд...")
             time.sleep(wait_time)
     
