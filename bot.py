@@ -1,16 +1,29 @@
 #!/usr/bin/env python3
 import os
+import sys
 import time
 import logging
 import sqlite3
 import asyncio
-from threading import Thread, Event
+from threading import Thread
 from flask import Flask, request, jsonify
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, ContextTypes, filters
 
-# Настройка переменных окружения
-BOT_TOKEN = os.environ.get("BOT_TOKEN", "8529167671:AAGqhrDUoU8-v3zcqNwPP4mGDT8id5BeZ5I")
+# ====== КОНФИГУРАЦИЯ ======
+# Получаем токен из переменных окружения (обязательно!)
+BOT_TOKEN = os.environ.get('BOT_TOKEN')
+
+# Проверяем, что токен установлен
+if not BOT_TOKEN:
+    print("❌ ОШИБКА: Переменная окружения BOT_TOKEN не установлена!")
+    print("ℹ️  На Render добавьте переменную BOT_TOKEN в настройках сервиса")
+    print("ℹ️  Локально создайте файл .env с BOT_TOKEN=ваш_токен")
+    sys.exit(1)
+
+# Маскируем токен для безопасного логирования
+MASKED_TOKEN = BOT_TOKEN[:10] + "..." + BOT_TOKEN[-5:]
+
 ADMINS = [
     7976904182,  # я
     5410696822,  # лиза
@@ -88,11 +101,10 @@ def get_user_count():
         logging.error(f"Ошибка получения количества пользователей: {e}")
         return 0
 
-# ====== ГЛОБАЛЬНЫЕ ПЕРЕМЕННЫЕ ======
-telegram_app = None
-shutdown_event = Event()
+# ====== ТЕЛЕГРАМ БОТ ======
+# Глобальная переменная для приложения
+application = None
 
-# ====== КОМАНДЫ ======
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обработка команды /start"""
     user = update.effective_user
@@ -217,7 +229,6 @@ async def users_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     await update.message.reply_text(message, parse_mode="Markdown")
 
-# ====== ОБРАБОТЧИКИ СООБЩЕНИЙ ======
 async def handle_user_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обработка сообщений от обычных пользователей"""
     user = update.effective_user
@@ -334,15 +345,21 @@ async def handle_admin_reply(update: Update, context: ContextTypes.DEFAULT_TYPE)
             parse_mode="Markdown"
         )
 
-# ====== ИНИЦИАЛИЗАЦИЯ БОТА ======
 def create_telegram_app():
     """Создание и настройка приложения Telegram"""
-    print(f"\n{'='*50}")
-    print(f"🚀 ИНИЦИАЛИЗАЦИЯ WEBHOOK БОТА - {time.ctime()}")
-    print(f"{'='*50}")
+    global application
+    
+    print(f"\n{'='*60}")
+    print(f"🚀 ЗАПУСК ТЕЛЕГРАМ БОТА")
+    print(f"{'='*60}")
+    print(f"⏰ Время: {time.ctime()}")
+    print(f"🔐 Токен: {MASKED_TOKEN}")
+    print(f"👑 Админов: {len(ADMINS)}")
+    print(f"🆔 Ваш ID: {YOUR_ID}")
     
     # Инициализация базы данных
     init_db()
+    print(f"📊 Пользователей в базе: {get_user_count()}")
     
     # Создаем приложение Telegram
     application = Application.builder().token(BOT_TOKEN).build()
@@ -366,10 +383,7 @@ def create_telegram_app():
         handle_admin_reply
     ))
     
-    print(f"✅ Бот инициализирован")
-    print(f"👑 Админов: {len(ADMINS)}")
-    print(f"📊 Пользователей в базе: {get_user_count()}")
-    
+    print("✅ Telegram бот инициализирован")
     return application
 
 # ====== FLASK APP ДЛЯ WEBHOOK ======
@@ -378,15 +392,16 @@ flask_app = Flask(__name__)
 @flask_app.route('/')
 def home():
     """Домашняя страница"""
-    return '''
+    return f'''
     <!DOCTYPE html>
     <html>
     <head>
         <title>Telegram Bot</title>
         <style>
-            body { font-family: Arial, sans-serif; text-align: center; padding: 50px; }
-            .status { color: green; font-size: 24px; }
-            .info { margin-top: 20px; color: #666; }
+            body {{ font-family: Arial, sans-serif; text-align: center; padding: 50px; }}
+            .status {{ color: green; font-size: 24px; }}
+            .info {{ margin-top: 20px; color: #666; }}
+            .token {{ font-family: monospace; background: #f5f5f5; padding: 10px; border-radius: 5px; margin: 20px; }}
         </style>
     </head>
     <body>
@@ -394,12 +409,14 @@ def home():
         <div class="status">✅ Бот активен и работает</div>
         <div class="info">
             <p>Webhook настроен и готов к приему обновлений</p>
-            <p>Пользователей в базе: {}</p>
-            <p>Режим: Webhook (без polling)</p>
+            <p>Пользователей в базе: {get_user_count()}</p>
+            <p>Токен: <span class="token">{MASKED_TOKEN}</span></p>
+            <p>Режим: Webhook</p>
+            <p><a href="/health">Проверить здоровье</a></p>
         </div>
     </body>
     </html>
-    '''.format(get_user_count())
+    '''
 
 @flask_app.route('/health')
 def health():
@@ -408,24 +425,26 @@ def health():
         'status': 'healthy',
         'timestamp': time.time(),
         'users_count': get_user_count(),
+        'bot_token_set': bool(BOT_TOKEN),
+        'token_masked': MASKED_TOKEN,
         'bot': 'webhook',
         'version': '2.0'
     }), 200
 
-@flask_app.route(f'/webhook/{BOT_TOKEN}', methods=['POST'])
+@flask_app.route('/webhook', methods=['POST'])
 async def webhook():
     """Endpoint для получения обновлений от Telegram"""
     try:
-        # Проверяем, инициализировано ли приложение
-        if not telegram_app:
+        if not application:
             return jsonify({'status': 'error', 'message': 'Bot not initialized'}), 500
         
         # Парсим обновление от Telegram
-        update = Update.de_json(request.get_json(force=True), telegram_app.bot)
+        json_data = request.get_json(force=True)
+        update = Update.de_json(json_data, application.bot)
         
         # Обрабатываем обновление
-        await telegram_app.initialize()
-        await telegram_app.process_update(update)
+        await application.initialize()
+        await application.process_update(update)
         
         return jsonify({'status': 'ok'}), 200
     except Exception as e:
@@ -434,42 +453,53 @@ async def webhook():
 
 def setup_webhook():
     """Настройка webhook"""
-    global telegram_app
+    global application
     
     # Даем время Flask запуститься
-    time.sleep(3)
+    time.sleep(5)
     
     # Получаем URL для webhook
     render_external_url = os.environ.get('RENDER_EXTERNAL_URL', '')
+    render_app_name = os.environ.get('RENDER_APP_NAME', '')
     
     if render_external_url:
         # На Render
-        webhook_url = f"{render_external_url}/webhook/{BOT_TOKEN}"
+        webhook_url = f"{render_external_url}/webhook"
+    elif render_app_name:
+        # Альтернативный способ получить URL на Render
+        webhook_url = f"https://{render_app_name}.onrender.com/webhook"
     else:
         # Локальная разработка
         port = int(os.environ.get('PORT', 8080))
-        webhook_url = f"http://localhost:{port}/webhook/{BOT_TOKEN}"
+        webhook_url = f"http://localhost:{port}/webhook"
         print(f"⚠️  Локальный режим: {webhook_url}")
     
-    print(f"🌐 Webhook URL: {webhook_url}")
+    print(f"\n🌐 Настройка Webhook:")
+    print(f"   URL: {webhook_url}")
+    print(f"   Токен: {MASKED_TOKEN}")
     
     try:
         # Удаляем старый webhook, если есть
-        telegram_app.bot.delete_webhook(drop_pending_updates=True)
-        time.sleep(1)
+        application.bot.delete_webhook(drop_pending_updates=True)
+        time.sleep(2)
         
         # Устанавливаем новый webhook
-        telegram_app.bot.set_webhook(
+        application.bot.set_webhook(
             url=webhook_url,
-            max_connections=100,
+            max_connections=40,
             drop_pending_updates=True,
             allowed_updates=['message', 'callback_query']
         )
         
         print("✅ Webhook успешно установлен")
         print(f"📊 Пользователей в базе: {get_user_count()}")
-        print(f"👑 Админов: {len(ADMINS)}")
-        print(f"🆔 Ваш ID: {YOUR_ID}")
+        
+        # Проверяем установку
+        webhook_info = application.bot.get_webhook_info()
+        print(f"ℹ️  Webhook информация:")
+        print(f"   URL: {webhook_info.url}")
+        print(f"   Ожидает обновлений: {webhook_info.pending_update_count}")
+        print(f"   Последняя ошибка: {webhook_info.last_error_message}")
         
     except Exception as e:
         print(f"❌ Ошибка установки webhook: {e}")
@@ -480,9 +510,9 @@ def setup_webhook():
 def run_flask():
     """Запуск Flask приложения"""
     port = int(os.environ.get('PORT', 8080))
-    print(f"🚀 Запуск Flask на порту {port}")
+    print(f"\n🚀 Запуск Flask на порту {port}")
+    print(f"📡 Webhook endpoint: POST /webhook")
     
-    # Явно указываем host и port
     flask_app.run(
         host='0.0.0.0',
         port=port,
@@ -494,8 +524,14 @@ def run_flask():
 # ====== ГЛАВНАЯ ФУНКЦИЯ ======
 if __name__ == "__main__":
     print("=" * 60)
-    print("🚀 ЗАПУСК БОТА С WEBHOOK (без polling)")
+    print("🚀 ЗАПУСК БОТА С WEBHOOK")
     print("=" * 60)
+    
+    # Проверяем переменные окружения
+    print(f"🔍 Проверка окружения:")
+    print(f"   PORT: {os.environ.get('PORT', '8080')}")
+    print(f"   RENDER: {'Да' if 'RENDER' in os.environ else 'Нет'}")
+    print(f"   PYTHON_VERSION: {os.environ.get('PYTHON_VERSION', 'Не установлен')}")
     
     # Инициализируем приложение Telegram
     telegram_app = create_telegram_app()
